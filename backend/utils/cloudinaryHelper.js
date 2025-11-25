@@ -44,11 +44,18 @@ const downloadFileFromCloudinary = (url) => {
  */
 const uploadFileToCloudinary = async (fileBuffer, originalName, folder = "excel-uploads") => {
   return new Promise((resolve, reject) => {
+    const extension = (originalName.split(".").pop() || "xlsx").toLowerCase();
+    const baseName = originalName.replace(/\.[^/.]+$/, "");
+    const uniqueName = `${baseName}-${Date.now()}`;
+
     const uploadStream = cloudinary.uploader.upload_stream(
       {
         folder: folder,
         resource_type: "raw",
-        public_id: originalName.replace(/\.[^/.]+$/, "") + "-" + Date.now(),
+        public_id: uniqueName,
+        format: extension,
+        use_filename: true,
+        unique_filename: false,
       },
       (error, result) => {
         if (error) {
