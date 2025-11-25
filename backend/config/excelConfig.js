@@ -21,8 +21,37 @@ const attendanceFileConfig = {
   endColumn: "R", // Kết thúc ở cột R (LeaveReason)
 };
 
+// Cấu hình cho file BHXH (insuranceFile)
+const insuranceFileConfig = {
+  sheetIndex: 0,
+  headerRow: 1,
+  startRow: 2,
+  startColumn: "A",
+  endColumn: "T",
+  dateOutputFormat: "DD/MM/YYYY",
+};
+
+// Mapping mặc định (có thể override từ frontend)
+const defaultInsuranceColumnMappings = [
+  // Ví dụ: Mã số BHXH (leave cột D) -> Số sổ BHXH (BHXH cột A)
+  { sourceColumn: "D", targetColumn: "A", type: "text" },
+  // Họ và tên (leave cột C) -> Họ và tên (BHXH cột B)
+  { sourceColumn: "C", targetColumn: "B", type: "text" },
+  // MNV (leave cột B) -> Mã nhân viên (BHXH cột C)
+  { sourceColumn: "B", targetColumn: "N", type: "text" },
+  // Từ ngày -> cột Từ ngày
+  { sourceColumn: "E", targetColumn: "C", type: "date" },
+  // Đến ngày -> cột Đến ngày
+  { sourceColumn: "F", targetColumn: "D", type: "date" },
+  // Thông tin tài khoản -> Số tài khoản ngân hàng
+  { sourceColumn: "Q", targetColumn: "K", type: "text" },
+  { sourceColumn: "C", targetColumn: "L", type: "text" },
+];
+
 module.exports = {
   leaveFileConfig,
   attendanceFileConfig,
+  insuranceFileConfig,
+  defaultInsuranceColumnMappings,
 };
 

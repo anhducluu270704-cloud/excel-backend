@@ -1,9 +1,15 @@
 const path = require("path");
 const fs = require("fs");
 const { parseExcelFile } = require("../services/excelParser");
-const { leaveFileConfig, attendanceFileConfig } = require("../config/excelConfig");
+const {
+  leaveFileConfig,
+  attendanceFileConfig,
+  insuranceFileConfig,
+  defaultInsuranceColumnMappings,
+} = require("../config/excelConfig");
 const { checkAttendanceData } = require("../services/checkAttendance");
 const { updateLeaveFile } = require("../services/updateLeaveFile");
+const { updateInsuranceFile } = require("../services/updateInsuranceFile");
 const { 
   downloadFileFromCloudinary, 
   uploadFileToCloudinary, 
@@ -18,6 +24,7 @@ const uploadTwoFiles = async (req, res) => {
       
       const leaveFile = req.files?.leaveFile?.[0];
       const attendanceFile = req.files?.attendanceFile?.[0];
+      const insuranceFile = req.files?.insuranceFile?.[0];
   
       if (!leaveFile || !attendanceFile) {
         return res.status(400).json({
@@ -31,9 +38,17 @@ const uploadTwoFiles = async (req, res) => {
         });
       }
 
+      if (!insuranceFile) {
+        return res.status(400).json({
+          message: "Thiếu file BHXH (insuranceFile). Vui lòng upload file sổ BHXH."
+        });
+      }
+
       // Lấy config từ request body (nếu có), nếu không thì dùng config mặc định
       let leaveConfigToUse = leaveFileConfig;
       let attendanceConfigToUse = attendanceFileConfig;
+      let insuranceConfigToUse = insuranceFileConfig;
+      let insuranceColumnMappings = defaultInsuranceColumnMappings;
       
       // Parse config từ formData (multer sẽ đặt text fields vào req.body)
       if (req.body.leaveFileConfig) {
@@ -76,12 +91,47 @@ const uploadTwoFiles = async (req, res) => {
         }
       }
 
+      if (req.body.insuranceFileConfig) {
+        try {
+          const configStr = typeof req.body.insuranceFileConfig === 'string'
+            ? req.body.insuranceFileConfig
+            : JSON.stringify(req.body.insuranceFileConfig);
+          const customInsuranceConfig = JSON.parse(configStr);
+          insuranceConfigToUse = {
+            ...insuranceFileConfig,
+            ...customInsuranceConfig,
+            sheetIndex: customInsuranceConfig.sheetIndex !== undefined ? parseInt(customInsuranceConfig.sheetIndex) : insuranceFileConfig.sheetIndex,
+            headerRow: customInsuranceConfig.headerRow !== undefined ? parseInt(customInsuranceConfig.headerRow) : insuranceFileConfig.headerRow,
+            startRow: customInsuranceConfig.startRow !== undefined ? parseInt(customInsuranceConfig.startRow) : insuranceFileConfig.startRow,
+          };
+        } catch (err) {
+          console.warn('Lỗi parse insuranceFileConfig, dùng config mặc định:', err.message);
+        }
+      }
+
+      if (req.body.insuranceColumnMappings) {
+        try {
+          const mappingsStr = typeof req.body.insuranceColumnMappings === 'string'
+            ? req.body.insuranceColumnMappings
+            : JSON.stringify(req.body.insuranceColumnMappings);
+          const parsedMappings = JSON.parse(mappingsStr);
+          if (Array.isArray(parsedMappings) && parsedMappings.length > 0) {
+            insuranceColumnMappings = parsedMappings;
+          }
+        } catch (err) {
+          console.warn('Lỗi parse insuranceColumnMappings, dùng mapping mặc định:', err.message);
+        }
+      }
+
+
       // Kiểm tra xem file đến từ Cloudinary hay disk storage
       const isLeaveFileCloudinary = !!(leaveFile.public_id || leaveFile.secure_url || (leaveFile.url && leaveFile.url.startsWith('http')));
       const isAttendanceFileCloudinary = !!(attendanceFile.public_id || attendanceFile.secure_url || (attendanceFile.url && attendanceFile.url.startsWith('http')));
+      const isInsuranceFileCloudinary = !!(insuranceFile.public_id || insuranceFile.secure_url || (insuranceFile.url && insuranceFile.url.startsWith('http')));
       
       let leaveFileBuffer;
       let attendanceFileBuffer;
+      let insuranceFileBuffer;
       
       // Xử lý leaveFile
       if (isLeaveFileCloudinary) {
@@ -125,8 +175,28 @@ const uploadTwoFiles = async (req, res) => {
         attendanceFileBuffer = fs.readFileSync(filePath);
       }
       
+      // Xử lý insuranceFile
+      if (isInsuranceFileCloudinary) {
+        const insuranceFileUrl = insuranceFile.path || insuranceFile.secure_url || insuranceFile.url;
+        if (!insuranceFileUrl) {
+          return res.status(400).json({
+            message: "Không thể lấy URL file insuranceFile từ Cloudinary"
+          });
+        }
+        insuranceFileBuffer = await downloadFileFromCloudinary(insuranceFileUrl);
+      } else {
+        const filePath = insuranceFile.path;
+        if (!filePath) {
+          return res.status(400).json({
+            message: "Không thể lấy đường dẫn file insuranceFile"
+          });
+        }
+        insuranceFileBuffer = fs.readFileSync(filePath);
+      }
+      
       const leaveFilePublicId = leaveFile.public_id;
       const attendanceFilePublicId = attendanceFile.public_id;
+      const insuranceFilePublicId = insuranceFile.public_id;
 
       // Parse cả 2 file từ buffer với config đã chọn
       const leaveData = await parseExcelFile(leaveFileBuffer, leaveConfigToUse);
@@ -148,6 +218,8 @@ const uploadTwoFiles = async (req, res) => {
           console.warn('Lỗi khi xóa file attendanceFile local:', cleanupError.message);
         }
       }
+
+      // (Không xóa insurance file ngay, cần dùng buffer để cập nhật và upload lại)
       
       // Check dữ liệu giữa 2 file
       const checkResults = checkAttendanceData(leaveData, attendanceData);
@@ -163,6 +235,26 @@ const uploadTwoFiles = async (req, res) => {
         'excel-uploads'
       );
       
+      // Cập nhật file BHXH dựa trên mapping
+      let insuranceUpdatedResult = null;
+      if (insuranceFileBuffer && insuranceColumnMappings?.length) {
+        const updatedInsuranceBuffer = await updateInsuranceFile(
+          insuranceFileBuffer,
+          leaveData,
+          {
+            insuranceConfig: insuranceConfigToUse,
+            columnMappings: insuranceColumnMappings,
+          }
+        );
+
+        const insuranceOriginalName = insuranceFile.originalname || 'insurance_file';
+        insuranceUpdatedResult = await uploadFileToCloudinary(
+          updatedInsuranceBuffer,
+          insuranceOriginalName.replace(/\.[^/.]+$/, '') + '_bhxh.xlsx',
+          'excel-uploads'
+        );
+      }
+
       // Cleanup: Xóa file leaveFile gốc sau khi đã upload file updated
       if (isLeaveFileCloudinary && leaveFilePublicId) {
         // Xóa từ Cloudinary
@@ -179,6 +271,21 @@ const uploadTwoFiles = async (req, res) => {
           console.warn('Lỗi khi xóa file leaveFile gốc local:', cleanupError.message);
         }
       }
+
+      // Cleanup: Xóa file insurance gốc sau khi xử lý xong
+      if (isInsuranceFileCloudinary && insuranceFilePublicId) {
+        try {
+          await deleteFileFromCloudinary(insuranceFilePublicId);
+        } catch (cleanupError) {
+          console.warn('Lỗi khi xóa file insurance từ Cloudinary:', cleanupError.message);
+        }
+      } else if (insuranceFile.path) {
+        try {
+          fs.unlinkSync(insuranceFile.path);
+        } catch (cleanupError) {
+          console.warn('Lỗi khi xóa file insurance local:', cleanupError.message);
+        }
+      }
       
       // Đếm số dòng có issue và lấy danh sách MNV có issue
       const issuesCount = checkResults.filter(r => r.hasIssue).length;
@@ -192,7 +299,9 @@ const uploadTwoFiles = async (req, res) => {
         files: {
           leaveFile: leaveFile.originalname,
           attendanceFile: attendanceFile.originalname,
-          updatedFile: updatedFileResult.public_id
+          insuranceFile: insuranceFile.originalname,
+          updatedLeaveFile: updatedFileResult.public_id,
+          updatedInsuranceFile: insuranceUpdatedResult?.public_id || null,
         },
         summary: {
           totalLeaveRows: leaveData.length,
@@ -201,7 +310,8 @@ const uploadTwoFiles = async (req, res) => {
           mnvWithIssues: mnvWithIssues,
           checkResults: checkResults
         },
-        downloadUrl: updatedFileResult.secure_url || updatedFileResult.url
+        downloadUrl: updatedFileResult.secure_url || updatedFileResult.url,
+        insuranceDownloadUrl: insuranceUpdatedResult?.secure_url || insuranceUpdatedResult?.url || null,
       });
   
     } catch (error) {
@@ -216,6 +326,11 @@ const uploadTwoFiles = async (req, res) => {
           await deleteFileFromCloudinary(attendanceFile.public_id);
         } else if (attendanceFile?.path) {
           fs.unlinkSync(attendanceFile.path);
+        }
+        if (insuranceFile?.public_id) {
+          await deleteFileFromCloudinary(insuranceFile.public_id);
+        } else if (insuranceFile?.path) {
+          fs.unlinkSync(insuranceFile.path);
         }
       } catch (cleanupError) {
         console.warn('Lỗi khi xóa file sau error:', cleanupError.message);
