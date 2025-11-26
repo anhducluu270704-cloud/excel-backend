@@ -171,9 +171,13 @@ const checkAttendanceData = (leaveData, attendanceData) => {
           const in1Str = in1 !== null && in1 !== undefined ? String(in1).trim() : '';
           const out1Str = out1 !== null && out1 !== undefined ? String(out1).trim() : '';
           
-          // Check nếu có In1 VÀ Out1
-          if (in1Str !== '' && out1Str !== '') {
-            issues.push(`In/Out: ${in1Str}-${out1Str}`);
+          // Check nếu có In1 HOẶC Out1
+          const hasIn = in1Str !== '';
+          const hasOut = out1Str !== '';
+          if (hasIn || hasOut) {
+            const inDisplay = hasIn ? in1Str : 'N/A';
+            const outDisplay = hasOut ? out1Str : 'N/A';
+            issues.push(`In/Out: ${inDisplay}-${outDisplay}`);
           }
           
           // ===== CHECK 2: Pay1 (độc lập) =====

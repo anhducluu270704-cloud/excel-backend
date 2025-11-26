@@ -65,8 +65,7 @@ router.post(
   "/leave",
   fields([
     { name: "leaveFile", maxCount: 1 },
-    { name: "attendanceFile", maxCount: 1 },
-    { name: "insuranceFile", maxCount: 1 }
+    { name: "attendanceFile", maxCount: 1 }
   ]),
   handleMulterError,
   uploadTwoFiles
